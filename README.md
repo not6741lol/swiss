@@ -14,22 +14,25 @@ No runtime, no Node, no Python, no uploads. It's one file, about 1.5 MB.
 
 ## Status
 
-🚧 **All three jobs work.** Prebuilt binaries are still to come.
+🎉 **v0.1.0 is out** — all three jobs work, and the first Windows build is on the
+[releases page](https://github.com/not6741lol/swiss/releases).
 
 - [x] CLI skeleton
 - [x] `unlock` — Restart Manager integration
 - [x] `pdf` — merge / split / rotate / strip / info
 - [x] `brand` — favicon set + web manifest
 - [x] `brand` — Open Graph image
-- [ ] Prebuilt release binaries
+- [x] Prebuilt release binaries
 
 ## Install
+
+Grab the binary from [Releases](https://github.com/not6741lol/swiss/releases) — one file, no installer, no runtime.
+
+Or build it yourself:
 
 ```bash
 cargo install --git https://github.com/not6741lol/swiss
 ```
-
-Prebuilt binaries will land in [Releases](https://github.com/not6741lol/swiss/releases).
 
 ## Usage
 
