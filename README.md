@@ -18,7 +18,7 @@ No runtime, no Node, no Python, no uploads. It's one file.
 
 - [x] CLI skeleton
 - [x] `unlock` — Restart Manager integration
-- [ ] `pdf` — merge / split / rotate / strip / info
+- [x] `pdf` — merge / split / rotate / strip / info
 - [ ] `brand` — favicon set + web manifest
 - [ ] `brand` — Open Graph image
 - [ ] Prebuilt release binaries
