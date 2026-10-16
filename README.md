@@ -17,7 +17,7 @@ No runtime, no Node, no Python, no uploads. It's one file.
 🚧 **Early.** The CLI surface is in place; the three jobs are being filled in milestone by milestone.
 
 - [x] CLI skeleton
-- [ ] `unlock` — Restart Manager integration
+- [x] `unlock` — Restart Manager integration
 - [ ] `pdf` — merge / split / rotate / strip / info
 - [ ] `brand` — favicon set + web manifest
 - [ ] `brand` — Open Graph image
