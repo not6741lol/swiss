@@ -1,0 +1,26 @@
+[package]
+name = "swiss"
+version = "0.1.0"
+edition = "2021"
+description = "One small binary, three small jobs: unlock what's holding a file, wrangle PDFs, and build a full web branding set from one image."
+license = "MIT"
+repository = "https://github.com/not6741lol/swiss"
+homepage = "https://not6741.lol"
+readme = "README.md"
+keywords = ["cli", "pdf", "favicon", "utility", "windows"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "swiss"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
