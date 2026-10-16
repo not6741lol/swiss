@@ -17,7 +17,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-lopdf = "0.45.0"
+fontdue = "0.9.4"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+lopdf = { version = "0.45.0", default-features = false }
 
 [profile.release]
 opt-level = "z"
