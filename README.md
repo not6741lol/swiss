@@ -76,3 +76,7 @@ Swiss-army knife: small, portable, and it's the tool you reach for instead of in
 ## License
 
 MIT
+
+---
+
+<sub>Made by **not**. More projects and build notes: **[not6741.lol](https://not6741.lol/)**</sub>
