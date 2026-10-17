@@ -1,5 +1,13 @@
 # swiss
 
+[![release](https://img.shields.io/github/v/release/not6741lol/swiss?label=release&color=blue)](https://github.com/not6741lol/swiss/releases)
+[![Made with Rust](https://img.shields.io/badge/Made%20with-Rust-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![license](https://img.shields.io/github/license/not6741lol/swiss?color=blue)](LICENSE)
+
+> [!NOTE]
+> This project was made by **not6741** with the help of **DeepSeek**, written in **Rust**.
+> It uses the **MIT license** and is **fully FOSS** (free and open-source software).
+
 **One small binary, three small jobs.**
 
 `swiss` bundles three everyday chores into a single static binary:
