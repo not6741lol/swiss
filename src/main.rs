@@ -7,9 +7,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-mod brand;
-mod pdf;
-mod unlock;
+use swiss::{brand, pdf, unlock};
 
 /// One small binary, three small jobs.
 #[derive(Debug, Parser)]

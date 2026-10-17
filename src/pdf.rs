@@ -1,6 +1,9 @@
 //! `swiss pdf` — merge, split, rotate, strip metadata and inspect PDFs.
 //!
 //! Pure Rust, via `lopdf`. No external binaries, nothing uploaded anywhere.
+//!
+//! Each operation has two halves: a function that does the work and returns a
+//! report, and a line in [`run`] that prints it.
 
 use std::path::Path;
 
@@ -65,23 +68,129 @@ pub enum PdfCommand {
     },
 }
 
+// ------------------------------------------------------------------- reports
+
+/// What [`merge`] did.
+#[derive(Debug, Clone)]
+pub struct MergeReport {
+    /// How many files went in.
+    pub inputs: usize,
+    /// How many pages came out.
+    pub pages: usize,
+    /// Where the merged file was written.
+    pub out: String,
+}
+
+/// What [`split`] did.
+#[derive(Debug, Clone)]
+pub struct SplitReport {
+    /// The directory the pages were written to.
+    pub out_dir: String,
+    /// One path per page, in page order.
+    pub written: Vec<String>,
+}
+
+/// What [`rotate`] did.
+#[derive(Debug, Clone)]
+pub struct RotateReport {
+    /// How many pages were touched.
+    pub pages: usize,
+    /// The rotation applied, in degrees.
+    pub degrees: i32,
+    /// Where the result was written.
+    pub out: String,
+}
+
+/// What [`strip`] did.
+#[derive(Debug, Clone)]
+pub struct StripReport {
+    /// The file that was read.
+    pub input: String,
+    /// Where the stripped file was written.
+    pub out: String,
+}
+
+/// Everything [`info`] learned about a document.
+#[derive(Debug, Clone)]
+pub struct PdfInfo {
+    /// The file that was read.
+    pub path: String,
+    /// Size on disk, in bytes.
+    pub bytes: u64,
+    /// PDF version from the header, e.g. `1.5`.
+    pub version: String,
+    /// Page count.
+    pub pages: usize,
+    /// Whether the trailer carries an `/Encrypt` entry.
+    pub encrypted: bool,
+    /// Title, author, producer and friends, in the order they should be shown.
+    pub metadata: Vec<(String, String)>,
+}
+
+// ------------------------------------------------------------------ front-end
+
 pub fn run(args: PdfArgs) -> Result<()> {
     match args.command {
-        PdfCommand::Merge { out, inputs } => merge(&inputs, &out),
-        PdfCommand::Split { input, pages, out } => split(&input, pages.as_deref(), &out),
-        PdfCommand::Rotate { input, deg, out } => rotate(&input, deg, out.as_deref()),
-        PdfCommand::Strip { input, out } => strip(&input, out.as_deref()),
-        PdfCommand::Info { input } => info(&input),
+        PdfCommand::Merge { out, inputs } => {
+            let report = merge(&inputs, &out)?;
+            println!(
+                "Merged {} file(s) — {} page(s) total — into {}",
+                report.inputs, report.pages, report.out
+            );
+            Ok(())
+        }
+
+        PdfCommand::Split { input, pages, out } => {
+            let report = split(&input, pages.as_deref(), &out)?;
+            for file in &report.written {
+                println!("wrote {file}");
+            }
+            println!(
+                "\n{} page(s) written to {}",
+                report.written.len(),
+                report.out_dir
+            );
+            Ok(())
+        }
+
+        PdfCommand::Rotate { input, deg, out } => {
+            let report = rotate(&input, deg, out.as_deref())?;
+            println!(
+                "Rotated {} page(s) by {}° -> {}",
+                report.pages, report.degrees, report.out
+            );
+            Ok(())
+        }
+
+        PdfCommand::Strip { input, out } => {
+            let report = strip(&input, out.as_deref())?;
+            println!("Stripped metadata from {} -> {}", report.input, report.out);
+            Ok(())
+        }
+
+        PdfCommand::Info { input } => {
+            let found = info(&input)?;
+            println!("file      : {}", found.path);
+            println!("size      : {}", human_size(found.bytes));
+            println!("version   : {}", found.version);
+            println!("pages     : {}", found.pages);
+            println!("encrypted : {}", found.encrypted);
+
+            if !found.metadata.is_empty() {
+                println!();
+                for (key, value) in &found.metadata {
+                    println!("{:<13}: {value}", key.to_lowercase());
+                }
+            }
+            Ok(())
+        }
     }
 }
 
-/// Reserve the next free object id in a document.
-fn next_id(doc: &mut Document) -> ObjectId {
-    doc.max_id += 1;
-    (doc.max_id, 0)
-}
+// --------------------------------------------------------------------- work
 
-fn merge(inputs: &[String], out: &str) -> Result<()> {
+/// Merge `inputs` into `out`, in the order given.
+pub fn merge(inputs: &[String], out: &str) -> Result<MergeReport> {
     if inputs.len() < 2 {
         bail!("merging needs at least two input files");
     }
@@ -91,8 +200,7 @@ fn merge(inputs: &[String], out: &str) -> Result<()> {
     let mut highest: u32 = 0;
 
     for input in inputs {
-        let mut doc =
-            Document::load(input).with_context(|| format!("could not read `{input}`"))?;
+        let mut doc = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
 
         // Shift every object id so documents never collide, then keep the pages.
         doc.renumber_objects_with(highest + 1);
@@ -145,15 +253,15 @@ fn merge(inputs: &[String], out: &str) -> Result<()> {
         .save(out)
         .with_context(|| format!("could not write `{out}`"))?;
 
-    println!(
-        "Merged {} file(s) — {} page(s) total — into {out}",
-        inputs.len(),
-        page_ids.len()
-    );
-    Ok(())
+    Ok(MergeReport {
+        inputs: inputs.len(),
+        pages: page_ids.len(),
+        out: out.to_string(),
+    })
 }
 
-fn split(input: &str, pages: Option<&str>, out_dir: &str) -> Result<()> {
+/// Write one file per selected page into `out_dir`.
+pub fn split(input: &str, pages: Option<&str>, out_dir: &str) -> Result<SplitReport> {
     let probe = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
     let all: Vec<u32> = probe.get_pages().keys().copied().collect();
     let total = all.len() as u32;
@@ -170,9 +278,12 @@ fn split(input: &str, pages: Option<&str>, out_dir: &str) -> Result<()> {
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "page".to_string());
 
+    let mut written = Vec::with_capacity(selected.len());
+
     for page in &selected {
         // Reload each time so every output starts from a clean document.
-        let mut single = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
+        let mut single =
+            Document::load(input).with_context(|| format!("could not read `{input}`"))?;
 
         let drop: Vec<u32> = all.iter().copied().filter(|number| number != page).collect();
         single.delete_pages(&drop);
@@ -184,14 +295,17 @@ fn split(input: &str, pages: Option<&str>, out_dir: &str) -> Result<()> {
         single
             .save(&target)
             .with_context(|| format!("could not write `{}`", target.display()))?;
-        println!("wrote {}", target.display());
+        written.push(target.display().to_string());
     }
 
-    println!("\n{} page(s) written to {out_dir}", selected.len());
-    Ok(())
+    Ok(SplitReport {
+        out_dir: out_dir.to_string(),
+        written,
+    })
 }
 
-fn rotate(input: &str, deg: i32, out: Option<&str>) -> Result<()> {
+/// Rotate every page by `deg`, writing to `out` (or over the input).
+pub fn rotate(input: &str, deg: i32, out: Option<&str>) -> Result<RotateReport> {
     let dest = out.unwrap_or(input);
 
     let mut doc = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
@@ -223,67 +337,87 @@ fn rotate(input: &str, deg: i32, out: Option<&str>) -> Result<()> {
     doc.save(dest)
         .with_context(|| format!("could not write `{dest}`"))?;
 
-    println!("Rotated {count} page(s) by {deg}° -> {dest}");
-    Ok(())
+    Ok(RotateReport {
+        pages: count,
+        degrees: deg,
+        out: dest.to_string(),
+    })
 }
 
-fn strip(input: &str, out: Option<&str>) -> Result<()> {
+/// Remove the info dictionary and any XMP metadata stream.
+pub fn strip(input: &str, out: Option<&str>) -> Result<StripReport> {
     let dest = out.unwrap_or(input);
 
     let mut doc = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
 
-    // The document info dictionary holds title/author/producer/creator/dates.
+    // `/Info` is an indirect reference in almost every real PDF, so the object has
+    // to go as well — dropping only the trailer entry would leave the metadata
+    // bytes sitting in the file for anyone to read back.
+    let info_id = match doc.trailer.get(b"Info") {
+        Ok(Object::Reference(id)) => Some(*id),
+        _ => None,
+    };
     doc.trailer.remove(b"Info");
+    if let Some(id) = info_id {
+        doc.objects.remove(&id);
+    }
 
-    // XMP metadata lives as a stream referenced from the catalog.
+    // XMP metadata is a stream referenced from the catalog, so same again.
+    let xmp_id = doc.catalog().ok().and_then(|catalog| {
+        match catalog.get(b"Metadata") {
+            Ok(Object::Reference(id)) => Some(*id),
+            _ => None,
+        }
+    });
     if let Ok(catalog) = doc.catalog_mut() {
         catalog.remove(b"Metadata");
     }
+    if let Some(id) = xmp_id {
+        doc.objects.remove(&id);
+    }
 
+    // Drop anything else the removals left unreachable.
+    doc.prune_objects();
     let _ = doc.compress();
     doc.save(dest)
         .with_context(|| format!("could not write `{dest}`"))?;
 
-    println!("Stripped metadata from {input} -> {dest}");
-    Ok(())
+    Ok(StripReport {
+        input: input.to_string(),
+        out: dest.to_string(),
+    })
 }
 
-fn info(input: &str) -> Result<()> {
+/// Read the page count, size, version and metadata of a document.
+pub fn info(input: &str) -> Result<PdfInfo> {
     let doc = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
 
     let bytes = std::fs::metadata(input).map(|meta| meta.len()).unwrap_or(0);
 
-    println!("file      : {input}");
-    println!("size      : {}", human_size(bytes));
-    println!("version   : {}", doc.version);
-    println!("pages     : {}", doc.get_pages().len());
-    println!("encrypted : {}", doc.trailer.has(b"Encrypt"));
+    let metadata = read_metadata(&doc);
 
-    if let Ok(object) = doc.trailer.get(b"Info") {
-        if let Ok(metadata) = object.as_dict() {
-            let mut printed_header = false;
-            for key in [
-                "Title",
-                "Author",
-                "Subject",
-                "Keywords",
-                "Creator",
-                "Producer",
-                "CreationDate",
-                "ModDate",
-            ] {
-                if let Some(text) = metadata.get(key.as_bytes()).ok().and_then(printable) {
-                    if !printed_header {
-                        println!();
-                        printed_header = true;
-                    }
-                    println!("{:<13}: {text}", key.to_lowercase());
-                }
-            }
-        }
-    }
+    Ok(PdfInfo {
+        path: input.to_string(),
+        bytes,
+        version: doc.version.clone(),
+        pages: doc.get_pages().len(),
+        encrypted: doc.trailer.has(b"Encrypt"),
+        metadata,
+    })
+}
 
-    Ok(())
+/// Just the page count — handy for a UI that needs to bound a page range.
+pub fn page_count(input: &str) -> Result<usize> {
+    let doc = Document::load(input).with_context(|| format!("could not read `{input}`"))?;
+    Ok(doc.get_pages().len())
+}
+
+// ------------------------------------------------------------------ helpers
+
+/// Reserve the next free object id in a document.
+fn next_id(doc: &mut Document) -> ObjectId {
+    doc.max_id += 1;
+    (doc.max_id, 0)
 }
 
 /// Turn `1-3,7` into `[1, 2, 3, 7]`, clamped to the document.
@@ -333,9 +467,49 @@ fn parse_pages(spec: &str, total: u32) -> Result<Vec<u32>> {
     Ok(pages)
 }
 
+/// Read the `/Info` dictionary, following the indirect reference real files use.
+fn read_metadata(doc: &Document) -> Vec<(String, String)> {
+    let Ok(entry) = doc.trailer.get(b"Info") else {
+        return Vec::new();
+    };
+
+    // `/Info` is nearly always `n 0 R` rather than an inline dictionary, so the
+    // object has to be resolved before any of its keys can be read.
+    let dict = match entry {
+        Object::Reference(id) => match doc.get_object(*id).ok().and_then(|obj| obj.as_dict().ok()) {
+            Some(dict) => dict,
+            None => return Vec::new(),
+        },
+        other => match other.as_dict() {
+            Ok(dict) => dict,
+            Err(_) => return Vec::new(),
+        },
+    };
+
+    const KEYS: [&str; 8] = [
+        "Title",
+        "Author",
+        "Subject",
+        "Keywords",
+        "Creator",
+        "Producer",
+        "CreationDate",
+        "ModDate",
+    ];
+
+    KEYS.iter()
+        .filter_map(|key| {
+            dict.get(key.as_bytes())
+                .ok()
+                .and_then(printable)
+                .map(|text| (key.to_string(), text))
+        })
+        .collect()
+}
+
 fn printable(object: &Object) -> Option<String> {
     match object {
-        Object::String(bytes, _) => Some(String::from_utf8_lossy(bytes).trim().to_string()),
+        Object::String(bytes, _) => Some(decode_text(bytes)),
         Object::Name(bytes) => Some(String::from_utf8_lossy(bytes).to_string()),
         Object::Integer(value) => Some(value.to_string()),
         Object::Real(value) => Some(value.to_string()),
@@ -343,7 +517,21 @@ fn printable(object: &Object) -> Option<String> {
     }
 }
 
-fn human_size(bytes: u64) -> String {
+/// PDF text strings are either PDFDocEncoding or UTF-16BE behind a byte-order mark.
+fn decode_text(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let units: Vec<u16> = bytes[2..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16_lossy(&units).trim().to_string()
+    } else {
+        String::from_utf8_lossy(bytes).trim().to_string()
+    }
+}
+
+/// Format a byte count as `1.5 MB` and friends.
+pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
 
     let mut value = bytes as f64;

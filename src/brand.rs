@@ -116,6 +116,55 @@ pub enum BrandCommand {
     },
 }
 
+// ------------------------------------------------------------------- reports
+
+/// One file written by [`favicons`], with a label for it.
+#[derive(Debug, Clone)]
+pub struct Entry {
+    /// Where it was written.
+    pub path: PathBuf,
+    /// Short description, e.g. `16x16` or `16 / 32 / 48`.
+    pub detail: String,
+}
+
+/// Everything [`favicons`] wrote.
+#[derive(Debug, Clone)]
+pub struct IconSet {
+    /// The directory the set went into.
+    pub dir: PathBuf,
+    /// The app name used in the manifest.
+    pub app: String,
+    /// Every file, in the order they should be shown.
+    pub entries: Vec<Entry>,
+    /// The `<head>` block that goes with this set.
+    pub snippet: String,
+}
+
+/// Everything [`card`] wrote.
+#[derive(Debug, Clone)]
+pub struct Card {
+    /// Where the card was written.
+    pub out: PathBuf,
+    /// Card width in pixels.
+    pub width: u32,
+    /// Card height in pixels.
+    pub height: u32,
+    /// Set when a headline was requested but no font could be loaded, so the card
+    /// came out logo-only.
+    pub font_missing: bool,
+}
+
+/// A rendered card, plus anything the caller ought to know about it.
+pub struct RenderedCard {
+    /// The pixels.
+    pub image: RgbaImage,
+    /// Set when there was a headline to draw but no usable font to draw it with,
+    /// so the card came out logo-only.
+    pub font_missing: bool,
+}
+
+// ------------------------------------------------------------------ front-end
+
 pub fn run(args: BrandArgs) -> Result<()> {
     match args.command {
         BrandCommand::Favicon {
@@ -125,14 +174,11 @@ pub fn run(args: BrandArgs) -> Result<()> {
             theme,
             bg,
             fit,
-        } => favicons(
-            &image,
-            Path::new(&out),
-            name.as_deref(),
-            &theme,
-            &bg,
-            fit,
-        ),
+        } => {
+            let set = favicons(&image, Path::new(&out), name.as_deref(), &theme, &bg, fit)?;
+            print_set(&set);
+            Ok(())
+        }
 
         BrandCommand::Og {
             image,
@@ -146,10 +192,11 @@ pub fn run(args: BrandArgs) -> Result<()> {
             fit,
         } => {
             let (width, height) = parse_size(&size)?;
-            card(
+            let shown = title.as_deref().unwrap_or("");
+            let card = card(
                 &image,
                 Path::new(&out),
-                title.as_deref().unwrap_or(""),
+                shown,
                 subtitle.as_deref(),
                 width,
                 height,
@@ -157,7 +204,15 @@ pub fn run(args: BrandArgs) -> Result<()> {
                 &accent,
                 font.as_deref(),
                 fit,
-            )
+            )?;
+            warn_missing_font(&card);
+            println!(
+                "Social card : {} ({}x{})",
+                card.out.display(),
+                card.width,
+                card.height
+            );
+            Ok(())
         }
 
         BrandCommand::Full {
@@ -173,13 +228,14 @@ pub fn run(args: BrandArgs) -> Result<()> {
             fit,
         } => {
             let dir = Path::new(&out);
-            favicons(&image, dir, name.as_deref(), &theme, &bg, fit)?;
+            let set = favicons(&image, dir, name.as_deref(), &theme, &bg, fit)?;
+            print_set(&set);
 
-            let social = dir.join("og.png");
-            card(
+            let shown = title.as_deref().unwrap_or("");
+            let social = card(
                 &image,
-                &social,
-                title.as_deref().unwrap_or(""),
+                &dir.join("og.png"),
+                shown,
                 subtitle.as_deref(),
                 1200,
                 630,
@@ -189,21 +245,53 @@ pub fn run(args: BrandArgs) -> Result<()> {
                 fit,
             )?;
 
-            println!("\nSocial card : {}", social.display());
+            warn_missing_font(&social);
+            println!(
+                "\nSocial card : {} ({}x{})",
+                social.out.display(),
+                social.width,
+                social.height
+            );
             Ok(())
         }
     }
 }
 
+/// The `swiss brand favicon` report, as the terminal shows it.
+fn print_set(set: &IconSet) {
+    println!("Icons -> {}\n", set.dir.display());
+
+    for entry in &set.entries {
+        let name = entry
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+        println!("  {:<28}{}", name, entry.detail);
+    }
+
+    println!("\nPaste into <head>:\n");
+    println!("{}", set.snippet);
+}
+
+/// Say so when a card wanted text but had no font to draw it with.
+fn warn_missing_font(card: &Card) {
+    if card.font_missing {
+        eprintln!("note: no system font found, drawing the card without text (pass --font)");
+    }
+}
+
+// --------------------------------------------------------------------- work
+
 /// Write the whole icon set, the manifest and the HTML snippet.
-fn favicons(
+pub fn favicons(
     image: &str,
     dir: &Path,
     name: Option<&str>,
     theme: &str,
     bg: &str,
     fit: Fit,
-) -> Result<()> {
+) -> Result<IconSet> {
     let source = load_image(image)?;
     let theme = parse_color(theme)?;
     let bg = parse_color(bg)?;
@@ -212,7 +300,7 @@ fn favicons(
 
     let app = name.map(str::to_string).unwrap_or_else(|| default_name(image));
 
-    println!("Icons -> {}\n", dir.display());
+    let mut entries = Vec::new();
 
     // The well-known set browsers and phones actually look for.
     let icons: [(&str, u32, bool); 5] = [
@@ -230,7 +318,10 @@ fn favicons(
         let path = dir.join(file);
         icon.save_with_format(&path, ImageFormat::Png)
             .with_context(|| format!("could not write `{}`", path.display()))?;
-        println!("  {:<28}{}x{}", file, size, size);
+        entries.push(Entry {
+            path,
+            detail: format!("{size}x{size}"),
+        });
     }
 
     // A single .ico with 16/32/48 frames, for old tabs, bookmarks and legacy Windows.
@@ -240,7 +331,10 @@ fn favicons(
         .collect();
     let ico = dir.join("favicon.ico");
     write_ico(&frames, &ico)?;
-    println!("  {:<28}16 / 32 / 48", "favicon.ico");
+    entries.push(Entry {
+        path: ico,
+        detail: "16 / 32 / 48".to_string(),
+    });
 
     let manifest = dir.join("manifest.webmanifest");
     fs::write(
@@ -248,15 +342,22 @@ fn favicons(
         manifest_json(&app, &short_name(&app), &hex(theme), &hex(bg)),
     )
     .with_context(|| format!("could not write `{}`", manifest.display()))?;
-    println!("  {:<28}{}", "manifest.webmanifest", app);
+    entries.push(Entry {
+        path: manifest,
+        detail: app.clone(),
+    });
 
-    print_snippet(&hex(theme));
-    Ok(())
+    Ok(IconSet {
+        dir: dir.to_path_buf(),
+        app,
+        entries,
+        snippet: snippet(&hex(theme)),
+    })
 }
 
-/// Render the Open Graph card.
+/// Render the Open Graph card and write it to `out`.
 #[allow(clippy::too_many_arguments)]
-fn card(
+pub fn card(
     image: &str,
     out: &Path,
     title: &str,
@@ -267,7 +368,45 @@ fn card(
     accent: &str,
     font_path: Option<&str>,
     fit: Fit,
-) -> Result<()> {
+) -> Result<Card> {
+    let rendered = render_card(
+        image, title, subtitle, width, height, bg, accent, font_path, fit,
+    )?;
+
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("could not create `{}`", parent.display()))?;
+        }
+    }
+
+    rendered
+        .image
+        .save_with_format(out, ImageFormat::Png)
+        .with_context(|| format!("could not write `{}`", out.display()))?;
+
+    Ok(Card {
+        out: out.to_path_buf(),
+        width,
+        height,
+        font_missing: rendered.font_missing,
+    })
+}
+
+/// Draw the Open Graph card into a fresh image. Nothing is written to disk, which
+/// is what lets a UI show the result as you edit the fields.
+#[allow(clippy::too_many_arguments)]
+pub fn render_card(
+    image: &str,
+    title: &str,
+    subtitle: Option<&str>,
+    width: u32,
+    height: u32,
+    bg: &str,
+    accent: &str,
+    font_path: Option<&str>,
+    fit: Fit,
+) -> Result<RenderedCard> {
     let source = load_image(image)?;
     let background = parse_color(bg)?;
     let accent = parse_color(accent)?;
@@ -294,6 +433,8 @@ fn card(
     };
     let muted = blend(primary, background, 0.45);
 
+    let mut font_missing = false;
+
     match (font.as_ref(), title.is_empty()) {
         // Logo on the left, text on the right.
         (Some(font), false) => {
@@ -319,7 +460,16 @@ fn card(
             let block = title_height + if subtitle.is_some() { gap + subtitle_height } else { 0.0 };
 
             let mut cursor = ((height as f32 - block) / 2.0).max(pad as f32);
-            cursor += draw_text(&mut canvas, font, title, title_px, text_left, cursor, text_width, primary);
+            cursor += draw_text(
+                &mut canvas,
+                font,
+                title,
+                title_px,
+                text_left,
+                cursor,
+                text_width,
+                primary,
+            );
 
             if let Some(subtitle) = subtitle {
                 cursor += gap;
@@ -338,9 +488,8 @@ fn card(
 
         // Nothing to say, or no font available: just present the logo.
         _ => {
-            if font.is_none() && !title.is_empty() {
-                eprintln!("note: no system font found, drawing the card without text (pass --font)");
-            }
+            font_missing = font.is_none() && !title.is_empty();
+
             let box_size = ((width.min(height) as f32) * 0.62).round() as u32;
             let logo = squared(&source, box_size, fit, None);
             let x = (width.saturating_sub(box_size) / 2) as i64;
@@ -349,19 +498,10 @@ fn card(
         }
     }
 
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("could not create `{}`", parent.display()))?;
-        }
-    }
-
-    canvas
-        .save_with_format(out, ImageFormat::Png)
-        .with_context(|| format!("could not write `{}`", out.display()))?;
-
-    println!("Social card : {} ({}x{})", out.display(), width, height);
-    Ok(())
+    Ok(RenderedCard {
+        image: canvas,
+        font_missing,
+    })
 }
 
 // ---------------------------------------------------------------- image helpers
@@ -378,7 +518,7 @@ fn load_image(path: &str) -> Result<DynamicImage> {
 /// Fit `source` into a `size` x `size` RGBA square.
 ///
 /// `padding` fills the canvas behind a contained image; `None` leaves it transparent.
-fn squared(
+pub fn squared(
     source: &DynamicImage,
     size: u32,
     fit: Fit,
@@ -454,7 +594,8 @@ fn write_ico(frames: &[(u32, RgbaImage)], out: &Path) -> Result<()> {
 
 // ------------------------------------------------------------------ text helpers
 
-fn system_font() -> Option<PathBuf> {
+/// The system UI font, if one of the usual suspects exists.
+pub fn system_font() -> Option<PathBuf> {
     const CANDIDATES: [&str; 8] = [
         r"C:\Windows\Fonts\segoeuib.ttf",
         r"C:\Windows\Fonts\segoeui.ttf",
@@ -472,7 +613,8 @@ fn system_font() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn load_font(explicit: Option<&str>) -> Result<Option<Font>> {
+/// Load a `.ttf`/`.otf`, falling back to the system font.
+pub fn load_font(explicit: Option<&str>) -> Result<Option<Font>> {
     let path = match explicit {
         Some(path) => PathBuf::from(path),
         None => match system_font() {
@@ -579,7 +721,8 @@ fn draw_text(
 
 // ------------------------------------------------------------------ colour helpers
 
-fn parse_color(spec: &str) -> Result<Rgba<u8>> {
+/// Parse `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
+pub fn parse_color(spec: &str) -> Result<Rgba<u8>> {
     let hex = spec.trim().trim_start_matches('#');
 
     let mut digits = Vec::with_capacity(hex.len());
@@ -647,7 +790,8 @@ fn blend(from: Rgba<u8>, to: Rgba<u8>, amount: f32) -> Rgba<u8> {
 
 // ------------------------------------------------------------------ misc helpers
 
-fn parse_size(spec: &str) -> Result<(u32, u32)> {
+/// Parse `1200x630` into a width and height.
+pub fn parse_size(spec: &str) -> Result<(u32, u32)> {
     let (width, height) = spec
         .split_once(['x', 'X'])
         .ok_or_else(|| anyhow!("expected a size like 1200x630, got `{spec}`"))?;
@@ -729,12 +873,18 @@ fn escape_json(value: &str) -> String {
     out
 }
 
-fn print_snippet(theme: &str) {
-    println!("\nPaste into <head>:\n");
-    println!("  <link rel=\"icon\" href=\"/favicon.ico\" sizes=\"any\">");
-    println!("  <link rel=\"icon\" type=\"image/png\" sizes=\"32x32\" href=\"/favicon-32x32.png\">");
-    println!("  <link rel=\"icon\" type=\"image/png\" sizes=\"16x16\" href=\"/favicon-16x16.png\">");
-    println!("  <link rel=\"apple-touch-icon\" sizes=\"180x180\" href=\"/apple-touch-icon.png\">");
-    println!("  <link rel=\"manifest\" href=\"/manifest.webmanifest\">");
-    println!("  <meta name=\"theme-color\" content=\"{theme}\">");
+/// The `<head>` block that goes with a generated icon set.
+fn snippet(theme: &str) -> String {
+    [
+        r#"  <link rel="icon" href="/favicon.ico" sizes="any">"#.to_string(),
+        r#"  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">"#
+            .to_string(),
+        r#"  <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">"#
+            .to_string(),
+        r#"  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">"#
+            .to_string(),
+        r#"  <link rel="manifest" href="/manifest.webmanifest">"#.to_string(),
+        format!(r#"  <meta name="theme-color" content="{theme}">"#),
+    ]
+    .join("\n")
 }

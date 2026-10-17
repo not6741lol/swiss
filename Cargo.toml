@@ -1,6 +1,9 @@
+[workspace]
+members = ["gui"]
+
 [package]
 name = "swiss"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "One small binary, three small jobs: unlock what's holding a file, wrangle PDFs, and build a full web branding set from one image."
 license = "MIT"
@@ -27,6 +30,21 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# `opt-level = "z"` makes egui's per-frame layout noticeably sluggish, so the hot
+# crates get real optimisation. Only swiss-gui links them, so the CLI's size is
+# unaffected by these.
+[profile.release.package.egui]
+opt-level = 3
+
+[profile.release.package.epaint]
+opt-level = 3
+
+[profile.release.package.ecolor]
+opt-level = 3
+
+[profile.release.package.emath]
+opt-level = 3
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_RestartManager", "Win32_System_Threading"] }

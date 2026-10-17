@@ -1,0 +1,20 @@
+[package]
+name = "swiss-gui"
+version = "0.2.0"
+edition = "2021"
+description = "The windowed half of swiss: unlock a locked file, wrangle PDFs, build a web branding set."
+license = "MIT"
+repository = "https://github.com/not6741lol/swiss"
+homepage = "https://not6741.lol"
+publish = false
+
+[[bin]]
+name = "swiss-gui"
+path = "src/main.rs"
+
+[dependencies]
+swiss = { path = ".." }
+anyhow = "1"
+eframe = "0.37"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+rfd = "0.17"

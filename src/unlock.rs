@@ -1,9 +1,10 @@
 //! `swiss unlock` — find out which process is holding a file, and optionally kill it.
 //!
-//! Backed by the Windows Restart Manager API. On other platforms the subcommand
-//! still exists (so `--help` stays consistent) but reports that it is unavailable.
+//! Backed by the Windows Restart Manager API. On other platforms the data API
+//! reports that it is unavailable, so a front-end can say so up front rather than
+//! failing once the user has already picked a file.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Args;
 
 #[derive(Debug, Args)]
@@ -20,14 +21,123 @@ pub struct UnlockArgs {
     pub yes: bool,
 }
 
+/// True when `swiss unlock` can actually do something on this platform.
+pub const SUPPORTED: bool = cfg!(windows);
+
+/// A process holding the target open.
+#[derive(Debug, Clone)]
+pub struct Holder {
+    /// Process id.
+    pub pid: u32,
+    /// Application name as reported by the Restart Manager.
+    pub name: String,
+    /// Raw `RM_APP_TYPE` value.
+    pub app_type: i32,
+}
+
+impl Holder {
+    /// Human-readable name for the application type.
+    pub fn type_label(&self) -> &'static str {
+        match self.app_type {
+            1 => "main window",
+            2 => "other window",
+            3 => "service",
+            4 => "explorer",
+            5 => "console",
+            1000 => "critical",
+            _ => "unknown",
+        }
+    }
+}
+
+/// The result of asking who holds a file open.
+#[derive(Debug)]
+pub struct Lock {
+    /// The path that was queried: canonical, without the `\\?\` verbatim prefix.
+    pub path: String,
+    /// The processes holding it open. Empty means nothing was found.
+    pub holders: Vec<Holder>,
+}
+
+/// Ask the Restart Manager which processes are holding `path` open.
+pub fn who_holds(path: &str) -> Result<Lock> {
+    platform::who_holds(path)
+}
+
+/// Terminate one process by id.
+pub fn terminate(pid: u32) -> Result<()> {
+    platform::terminate(pid)
+}
+
 pub fn run(args: UnlockArgs) -> Result<()> {
-    platform::run(args)
+    let lock = who_holds(&args.path)?;
+    let shown = &lock.path;
+
+    if lock.holders.is_empty() {
+        println!("Nothing is holding `{shown}`.");
+        return Ok(());
+    }
+
+    println!("{} process(es) are holding `{shown}`:\n", lock.holders.len());
+    for holder in &lock.holders {
+        println!(
+            "  pid {:>7}  {:<32}  {}",
+            holder.pid,
+            holder.name,
+            holder.type_label()
+        );
+    }
+
+    if !args.kill {
+        println!("\nRe-run with `--kill` to close them.");
+        return Ok(());
+    }
+
+    if !args.yes && !confirm("\nKill them?")? {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    let mut killed = 0usize;
+    let mut failed = 0usize;
+    for holder in &lock.holders {
+        match terminate(holder.pid) {
+            Ok(()) => {
+                killed += 1;
+                println!("  terminated {} (pid {})", holder.name, holder.pid);
+            }
+            Err(err) => {
+                failed += 1;
+                eprintln!("  could not terminate pid {}: {err}", holder.pid);
+            }
+        }
+    }
+
+    println!("\nDone — {killed} terminated, {failed} failed.");
+    if failed > 0 {
+        bail!("some processes could not be closed (try running as administrator)");
+    }
+    Ok(())
+}
+
+/// Ask a yes/no question on the terminal.
+fn confirm(prompt: &str) -> Result<bool> {
+    use std::io::{self, Write};
+
+    print!("{prompt} [y/N] ");
+    io::stdout().flush().ok();
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 #[cfg(windows)]
 mod platform {
     use std::ffi::OsStr;
-    use std::io::{self, Write};
     use std::os::windows::ffi::OsStrExt;
     use std::path::PathBuf;
 
@@ -40,7 +150,7 @@ mod platform {
     };
     use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
 
-    use super::UnlockArgs;
+    use super::{Holder, Lock};
 
     /// A Restart Manager session. Ends automatically when dropped.
     struct Session(u32);
@@ -52,7 +162,10 @@ mod platform {
             let mut key = [0u16; CCH_RM_SESSION_KEY as usize + 1];
             let status = unsafe { RmStartSession(&mut handle, None, PWSTR(key.as_mut_ptr())) };
             if status != ERROR_SUCCESS {
-                bail!("could not start a Restart Manager session (error {})", status.0);
+                bail!(
+                    "could not start a Restart Manager session (error {})",
+                    status.0
+                );
             }
             Ok(Session(handle))
         }
@@ -66,14 +179,8 @@ mod platform {
         }
     }
 
-    struct Holder {
-        pid: u32,
-        name: String,
-        app_type: i32,
-    }
-
-    pub fn run(args: UnlockArgs) -> Result<()> {
-        let target = resolve(&args.path)?;
+    pub fn who_holds(path: &str) -> Result<Lock> {
+        let target = resolve(path)?;
         let shown = pretty(&target);
         let session = Session::start()?;
 
@@ -88,56 +195,14 @@ mod platform {
             );
         }
 
-        let holders = query_holders(&session)?;
+        Ok(Lock {
+            path: shown,
+            holders: query_holders(&session)?,
+        })
+    }
 
-        if holders.is_empty() {
-            println!("Nothing is holding `{shown}`.");
-            return Ok(());
-        }
-
-        println!(
-            "{} process(es) are holding `{shown}`:\n",
-            holders.len()
-        );
-        for holder in &holders {
-            println!(
-                "  pid {:>7}  {:<32}  {}",
-                holder.pid,
-                holder.name,
-                type_label(holder.app_type)
-            );
-        }
-
-        if !args.kill {
-            println!("\nRe-run with `--kill` to close them.");
-            return Ok(());
-        }
-
-        if !args.yes && !confirm("\nKill them?")? {
-            println!("Aborted.");
-            return Ok(());
-        }
-
-        let mut killed = 0usize;
-        let mut failed = 0usize;
-        for holder in &holders {
-            match kill(holder.pid) {
-                Ok(()) => {
-                    killed += 1;
-                    println!("  terminated {} (pid {})", holder.name, holder.pid);
-                }
-                Err(err) => {
-                    failed += 1;
-                    eprintln!("  could not terminate pid {}: {err}", holder.pid);
-                }
-            }
-        }
-
-        println!("\nDone — {killed} terminated, {failed} failed.");
-        if failed > 0 {
-            bail!("some processes could not be closed (try running as administrator)");
-        }
-        Ok(())
+    pub fn terminate(pid: u32) -> Result<()> {
+        kill(pid)
     }
 
     /// Strip the `\\?\` verbatim prefix that `canonicalize` adds, so output stays readable.
@@ -218,15 +283,6 @@ mod platform {
         Ok(())
     }
 
-    fn confirm(prompt: &str) -> Result<bool> {
-        print!("{prompt} [y/N] ");
-        io::stdout().flush().ok();
-
-        let mut line = String::new();
-        io::stdin().read_line(&mut line)?;
-        Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-    }
-
     fn to_wide(value: &OsStr) -> Vec<u16> {
         value.encode_wide().chain(std::iter::once(0)).collect()
     }
@@ -235,26 +291,21 @@ mod platform {
         let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
         String::from_utf16_lossy(&buffer[..end])
     }
-
-    fn type_label(app_type: i32) -> &'static str {
-        match app_type {
-            1 => "main window",
-            2 => "other window",
-            3 => "service",
-            4 => "explorer",
-            5 => "console",
-            1000 => "critical",
-            _ => "unknown",
-        }
-    }
 }
 
 #[cfg(not(windows))]
 mod platform {
-    use super::UnlockArgs;
     use anyhow::Result;
 
-    pub fn run(_args: UnlockArgs) -> Result<()> {
+    use super::Lock;
+
+    pub fn who_holds(_path: &str) -> Result<Lock> {
+        anyhow::bail!(
+            "`swiss unlock` is only available on Windows (it relies on the Restart Manager API)"
+        )
+    }
+
+    pub fn terminate(_pid: u32) -> Result<()> {
         anyhow::bail!(
             "`swiss unlock` is only available on Windows (it relies on the Restart Manager API)"
         )
