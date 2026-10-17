@@ -1,6 +1,7 @@
 # swiss
 
 [![release](https://img.shields.io/github/v/release/not6741lol/swiss?label=release&color=blue)](https://github.com/not6741lol/swiss/releases)
+[![build](https://github.com/not6741lol/swiss/actions/workflows/ci.yml/badge.svg)](https://github.com/not6741lol/swiss/actions/workflows/ci.yml)
 [![Made with Rust](https://img.shields.io/badge/Made%20with-Rust-orange?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![license](https://img.shields.io/github/license/not6741lol/swiss?color=blue)](LICENSE)
 

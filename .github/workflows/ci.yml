@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The command line. It has no GUI dependencies, so this is cheap and can run
+  # on every platform.
+  cli:
+    name: cli (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # There are no tests yet, so right now this proves the CLI compiles and
+      # links on all three platforms. The step stays exactly as it is so that
+      # any test added later is enforced automatically instead of quietly
+      # skipped - which is what happens if the step is added late.
+      - run: cargo test --locked --verbose
+
+  # The window. A separate job, and the `--workspace` is load-bearing: a bare
+  # `cargo build` at the root of a workspace that has a root package builds
+  # only that package, so swiss-gui would never be compiled here and could rot
+  # unnoticed. Windows only - building the GUI on Linux or macOS would drag in
+  # system toolkit dependencies that the command line deliberately does not
+  # need, and the command line is the part that has to build everywhere.
+  gui:
+    name: gui (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked --verbose
