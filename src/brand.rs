@@ -640,11 +640,28 @@ pub fn load_font(explicit: Option<&str>) -> Result<Option<Font>> {
     }
 }
 
+/// How far apart wrapped lines sit, as a multiple of the font size. Display type
+/// wants tighter leading than body copy; 1.15 reads as one block without the
+/// descenders of a line colliding with the caps of the next.
+const LINE_SPACING: f32 = 1.15;
+
+/// Lay `text` out with word wrapping at `max_width`.
+///
+/// fontdue's `line_height` multiplies the font's *natural* line height — roughly
+/// 1.33em for Segoe UI and 1.15em for Arial — so asking for `1.2` silently gave
+/// 1.6em of leading on one font and 1.38em on another. Dividing the target by
+/// the font's own ratio makes [`LINE_SPACING`] mean what it says.
 fn build_layout(font: &Font, text: &str, px: f32, max_width: f32) -> Layout {
+    let natural = font
+        .horizontal_line_metrics(px)
+        .map(|metrics| metrics.new_line_size / px)
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.1)
+        .unwrap_or(1.0);
+
     let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
     layout.reset(&LayoutSettings {
         max_width: Some(max_width),
-        line_height: 1.2,
+        line_height: LINE_SPACING / natural,
         ..Default::default()
     });
     layout.append(&[font], &TextStyle::new(text, px, 0));
@@ -887,4 +904,56 @@ fn snippet(theme: &str) -> String {
         format!(r#"  <meta name="theme-color" content="{theme}">"#),
     ]
     .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A font to lay text out with. The system font is preferred, so the real
+    /// default path is exercised; the bundled Inter is the fallback that keeps
+    /// the test deterministic on a machine with no fonts installed.
+    fn test_font() -> Font {
+        if let Some(path) = system_font() {
+            if let Ok(Some(font)) = load_font(path.to_str()) {
+                return font;
+            }
+        }
+
+        Font::from_bytes(
+            include_bytes!("../gui/assets/Inter_400Regular.ttf").as_slice(),
+            FontSettings::default(),
+        )
+        .expect("the bundled test font should parse")
+    }
+
+    #[test]
+    fn wrapped_lines_are_spaced_in_ems_not_the_fonts_natural_leading() {
+        let font = test_font();
+        let px = 100.0;
+
+        // A hard break keeps this about leading rather than about where the
+        // wrapper decides to split. Comparing the same glyph on both lines
+        // removes rasterisation differences from the measurement.
+        let layout = build_layout(&font, "o\no", px, 1000.0);
+
+        let mut same = layout.glyphs().iter().filter(|glyph| glyph.parent == 'o');
+        let first = same.next().expect("first line should have an `o`");
+        let second = same.next().expect("second line should have an `o`");
+        let delta = second.y - first.y;
+
+        let natural = font
+            .horizontal_line_metrics(px)
+            .map(|metrics| metrics.new_line_size / px)
+            .unwrap_or(1.0);
+        let ratio = delta / px;
+
+        assert!(
+            (1.02..=1.30).contains(&ratio),
+            "lines are {ratio:.2}em apart ({delta:.1}px at {px}px); expected about \
+             {LINE_SPACING:.2}em. The font's natural leading is {natural:.2}em, so \
+             a raw multiplier of {LINE_SPACING:.2} would have produced {:.2}em",
+            natural * LINE_SPACING
+        );
+    }
 }

@@ -26,7 +26,7 @@ window. It's a separate binary, so the command line stays exactly as small as it
 
 ## Status
 
-🎉 **v0.2.0 is out** — all three jobs, the new `swiss-gui` window, and Windows builds of
+🎉 **v0.2.1 is out** — all three jobs, the new `swiss-gui` window, and Windows builds of
 both are on the [releases page](https://github.com/not6741lol/swiss/releases).
 
 - [x] CLI skeleton

@@ -3,7 +3,7 @@ members = ["gui"]
 
 [package]
 name = "swiss"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "One small binary, three small jobs: unlock what's holding a file, wrangle PDFs, and build a full web branding set from one image."
 license = "MIT"
