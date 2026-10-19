@@ -48,6 +48,7 @@ pub struct BrandTab {
     preview: Option<egui::TextureHandle>,
     preview_key: String,
     preview_error: Option<String>,
+    preview_note: Option<String>,
     generated: Option<Vec<PathBuf>>,
     snippet: Option<String>,
 }
@@ -74,6 +75,7 @@ impl Default for BrandTab {
             preview: None,
             preview_key: String::new(),
             preview_error: None,
+            preview_note: None,
             generated: None,
             snippet: None,
         }
@@ -224,17 +226,23 @@ impl BrandTab {
 
         label(ui, "headline");
         ui.add(
-            egui::TextEdit::singleline(&mut self.title)
+            egui::TextEdit::multiline(&mut self.title)
                 .hint_text("one small binary")
+                .desired_rows(1)
                 .desired_width(ui.available_width()),
         );
 
         ui.add_space(10.0);
         label(ui, "subtitle");
         ui.add(
-            egui::TextEdit::singleline(&mut self.subtitle)
+            egui::TextEdit::multiline(&mut self.subtitle)
                 .hint_text("three small jobs")
+                .desired_rows(1)
                 .desired_width(ui.available_width()),
+        );
+        ui::hint(
+            ui,
+            "enter starts a new line; the card wraps and balances the rest",
         );
 
         ui.add_space(12.0);
@@ -311,6 +319,7 @@ impl BrandTab {
             self.preview = None;
             self.preview_key.clear();
             self.preview_error = None;
+            self.preview_note = None;
             return;
         }
 
@@ -319,25 +328,30 @@ impl BrandTab {
         }
 
         match self.render_preview() {
-            Ok(image) => {
+            Ok(card) => {
+                let image = card.image;
                 let pixels = egui::ColorImage::from_rgba_unmultiplied(
                     [image.width() as usize, image.height() as usize],
                     image.as_raw(),
                 );
 
-                self.preview = Some(ctx.load_texture(
-                    "brand-preview",
-                    pixels,
-                    egui::TextureOptions::LINEAR,
-                ));
+                let texture =
+                    ctx.load_texture("brand-preview", pixels, egui::TextureOptions::LINEAR);
+                self.preview = Some(texture);
                 self.preview_key = key;
                 self.preview_error = None;
+                self.preview_note = if card.truncated {
+                    Some("copy is cut at 3 headline / 2 subtitle lines".to_string())
+                } else {
+                    None
+                };
             }
 
             Err(err) => {
                 self.preview = None;
                 self.preview_key = key;
                 self.preview_error = Some(format!("{err:#}"));
+                self.preview_note = None;
             }
         }
     }
@@ -381,11 +395,15 @@ impl BrandTab {
         }
     }
 
-    fn render_preview(&self) -> anyhow::Result<image::RgbaImage> {
+    fn render_preview(&self) -> anyhow::Result<brand::RenderedCard> {
         if self.mode == Mode::Favicon {
             let source = image::open(self.image.trim())?;
             let bg = brand::parse_color(&self.bg)?;
-            return Ok(brand::squared(&source, 384, self.fit, Some(bg)));
+            return Ok(brand::RenderedCard {
+                image: brand::squared(&source, 384, self.fit, Some(bg)),
+                font_missing: false,
+                truncated: false,
+            });
         }
 
         let (width, height) = brand::parse_size(&self.size)?;
@@ -413,7 +431,7 @@ impl BrandTab {
             self.fit,
         )?;
 
-        Ok(rendered.image)
+        Ok(rendered)
     }
 
     fn preview_ui(&mut self, ui: &mut egui::Ui, log: &mut Log) {
@@ -449,6 +467,11 @@ impl BrandTab {
                             natural.y as u32
                         ),
                     );
+                }
+
+                if let Some(note) = &self.preview_note {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(note).size(12.0).color(theme::ACCENT));
                 }
             }
         }
@@ -527,6 +550,9 @@ impl BrandTab {
                         if card.font_missing {
                             log.err("no font found — the card came out logo-only");
                         }
+                        if card.truncated {
+                            log.info("copy was cut at 3 headline / 2 subtitle lines");
+                        }
                         log.ok(format!(
                             "social card : {} ({}x{})",
                             card.out.display(),
@@ -570,6 +596,12 @@ impl BrandTab {
 
                         match self.card(&image, &social, font) {
                             Ok(card) => {
+                                if card.font_missing {
+                                    log.err("no font found — the card came out logo-only");
+                                }
+                                if card.truncated {
+                                    log.info("copy was cut at 3 headline / 2 subtitle lines");
+                                }
                                 log.ok(format!(
                                     "social card : {} ({}x{})",
                                     card.out.display(),

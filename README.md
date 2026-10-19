@@ -26,14 +26,14 @@ window. It's a separate binary, so the command line stays exactly as small as it
 
 ## Status
 
-🎉 **v0.2.1 is out** — all three jobs, the new `swiss-gui` window, and Windows builds of
+🎉 **v0.3.0 is out** — all three jobs, the new `swiss-gui` window, and Windows builds of
 both are on the [releases page](https://github.com/not6741lol/swiss/releases).
 
 - [x] CLI skeleton
 - [x] `unlock` — Restart Manager integration
 - [x] `pdf` — merge / split / rotate / strip / info
 - [x] `brand` — favicon set + web manifest
-- [x] `brand` — Open Graph image
+- [x] `brand` — Open Graph image, with balanced multi-line headlines
 - [x] `swiss-gui` — the same three jobs in a window
 - [x] Prebuilt release binaries
 
@@ -72,6 +72,9 @@ swiss pdf strip report.pdf
 
 # Branding: one image in, a full icon set plus a social card out
 swiss brand full logo.png --out public/ --name "not" --title "not" --subtitle "vibecoder"
+
+# A hard line break in the card title
+swiss brand og logo.png --title "one small\nbinary" --subtitle "the swiss web toolkit"
 ```
 
 ### `swiss brand`
@@ -89,6 +92,12 @@ Feed it one image (PNG or JPEG) and it writes the whole set:
 
 It prints the `<head>` snippet to paste in. Everything is rendered locally — the social card's
 text uses your system UI font, and `--font` points it at a specific `.ttf`/`.otf` if you'd rather.
+
+The headline and subtitle wrap on their own and are balanced, so a two-line title fills both
+lines instead of leaving an orphan. `\n` (or a real newline) forces a break. A card holds up
+to 3 headline lines and 2 subtitle lines; longer copy is cut with an ellipsis and the command
+says so. The type shrinks to fit short canvases, `--size` accepts 240x240 through 8192x8192, and
+headlines use the bold system face while supporting copy uses the regular one.
 
 ### `swiss-gui`
 
